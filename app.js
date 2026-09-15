@@ -36,7 +36,8 @@ document.addEventListener("DOMContentLoaded", () => {
 function initWorker() {
   if (worker) worker.terminate();
 
-  worker = new Worker("converter-worker.js");
+  // Cache buster para evitar que el navegador reutilice versiones viejas en cache
+  worker = new Worker(`converter-worker.js?v=${Date.now()}`);
 
   worker.onmessage = (e) => {
     const data = e.data;
