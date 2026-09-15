@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoreM5S3 TV Video Converter - M5Stack & Waveshare</title>
+  <meta name="description" content="Conversor online de videos a formato .mjpeg + .pcm para CoreM5S3 TV (M5Stack CoreS3 y Waveshare ESP32-S3 Touch LCD 1.54) sin instalar nada.">
+  
+  <!-- Inyección de cabeceras COOP/COEP para SharedArrayBuffer y FFmpeg WASM en GitHub Pages -->
+  <script src="coi-serviceworker.min.js"></script>
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- JSZip para empaquetar en ZIP -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    
+    <!-- Encabezado -->
+    <header>
+      <div class="badge-branch">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/>
+        </svg>
+        <span>feature/dual-display-support</span>
+      </div>
+      <h1>CoreM5S3 TV Converter</h1>
+      <p class="subtitle">Convierte episodios y videos a formato <code>.mjpeg</code> + <code>.pcm</code> directamente en tu navegador, sin instalar nada, listo para tu tarjeta microSD.</p>
+    </header>
+
+    <!-- Panel 1: Selector de Dispositivo Objetivo -->
+    <section class="panel" id="device-panel">
+      <div class="panel-title">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+          <polyline points="17 2 12 7 7 2"/>
+        </svg>
+        <span>1. Selecciona tu Dispositivo</span>
+      </div>
+
+      <div class="device-selector">
+        <!-- Tarjeta Waveshare 1.54 -->
+        <label class="device-card active" for="device-waveshare">
+          <input type="radio" id="device-waveshare" name="device" value="waveshare" checked>
+          <div class="device-header">
+            <span class="device-name">Waveshare 1.54"</span>
+            <span class="device-tag">Recomendado</span>
+          </div>
+          <div class="device-specs">
+            Resolución: <span class="device-badge-spec">240 × 240</span><br>
+            FPS objetivo: 15 FPS<br>
+            Audio: 44,100 Hz mono (s16le)
+          </div>
+        </label>
+
+        <!-- Tarjeta M5Stack CoreS3 -->
+        <label class="device-card" for="device-m5stack">
+          <input type="radio" id="device-m5stack" name="device" value="m5stack">
+          <div class="device-header">
+            <span class="device-name">M5Stack CoreS3</span>
+            <span class="device-tag">CoreS3 / SE</span>
+          </div>
+          <div class="device-specs">
+            Resolución: <span class="device-badge-spec">320 × 240</span><br>
+            FPS objetivo: 15 FPS<br>
+            Audio: 44,100 Hz mono (s16le)
+          </div>
+        </label>
+
+        <!-- Tarjeta Personalizada -->
+        <label class="device-card" for="device-custom">
+          <input type="radio" id="device-custom" name="device" value="custom">
+          <div class="device-header">
+            <span class="device-name">Personalizado</span>
+            <span class="device-tag">Avanzado</span>
+          </div>
+          <div class="device-specs">
+            Configura ancho, alto, FPS, calidad de compresión y sample rate a medida.
+          </div>
+        </label>
+      </div>
+
+      <!-- Ajustes avanzados desplegables -->
+      <details class="settings-details">
+        <summary>⚙ Ver / Ajustar parámetros de conversión detallados</summary>
+        <div class="settings-grid">
+          <div class="setting-field">
+            <label for="input-width">Ancho (px)</label>
+            <input type="number" id="input-width" value="240" step="2">
+          </div>
+          <div class="setting-field">
+            <label for="input-height">Alto (px)</label>
+            <input type="number" id="input-height" value="240" step="2">
+          </div>
+          <div class="setting-field">
+            <label for="input-fps">Fotogramas por seg (FPS)</label>
+            <input type="number" id="input-fps" value="15" min="5" max="30">
+          </div>
+          <div class="setting-field">
+            <label for="input-quality">Calidad JPEG (1-31)</label>
+            <input type="number" id="input-quality" value="8" min="1" max="31" title="Menor número = mayor calidad y mayor peso">
+          </div>
+          <div class="setting-field">
+            <label for="input-audiorate">Frecuencia Audio (Hz)</label>
+            <select id="input-audiorate">
+              <option value="44100" selected>44100 Hz (Alta fidelidad)</option>
+              <option value="22050">22050 Hz (Ahorra 50% espacio)</option>
+              <option value="16000">16000 Hz</option>
+            </select>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Panel 2: Carga de Archivos -->
+    <section class="panel" id="upload-panel">
+      <div class="panel-title">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>2. Selecciona o Arrastra los Videos</span>
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <polygon points="23 7 16 12 23 17 23 7"/>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <div class="dropzone-title">Arrastra tus archivos de video aquí</div>
+        <div class="dropzone-desc">Soporta MP4, MKV, AVI, MOV, WEBM y más. Reconoce automáticamente temporadas y episodios (ej: S01E01).</div>
+        <button class="btn-file-select" id="btn-select-files" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          Seleccionar Archivos
+        </button>
+        <input type="file" id="file-input" multiple accept="video/*,.mkv,.avi,.mp4,.mov,.webm" style="display: none;">
+      </div>
+
+      <!-- Cola de archivos cargados -->
+      <div class="queue-container" id="queue-container" style="display: none;"></div>
+
+      <!-- Botones de Acción -->
+      <div class="actions-container">
+        <button class="btn-primary" id="btn-start-convert" disabled>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Convertir Archivos
+        </button>
+      </div>
+
+      <!-- Barra de Progreso en Vivo -->
+      <div class="progress-box" id="progress-box">
+        <div class="progress-header">
+          <span id="progress-status">Preparando motor...</span>
+          <span id="progress-percentage">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="progress-bar-fill"></div>
+        </div>
+
+        <!-- Consola de logs colapsable -->
+        <details style="margin-top: 1rem;">
+          <summary style="cursor: pointer; font-size: 0.82rem; color: var(--text-muted);">Ver registro en vivo (FFmpeg logs)</summary>
+          <div class="console-box" id="console-box"></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Panel 3: Descargas y Resultados -->
+    <section class="panel" id="results-panel" style="display: none;">
+      <div class="panel-title">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span>3. Archivos Listos para Reproducir</span>
+      </div>
+
+      <div class="results-list" id="results-list"></div>
+
+      <div class="actions-container" style="margin-top: 1.5rem;">
+        <button class="btn-primary" id="btn-download-all" disabled>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Descargar Todo en ZIP para MicroSD
+        </button>
+      </div>
+    </section>
+
+    <!-- Panel 4: Guía rápida para la tarjeta MicroSD -->
+    <section class="panel">
+      <div class="panel-title">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <span>¿Cómo copiar los archivos a tu dispositivo?</span>
+      </div>
+
+      <div class="guide-steps">
+        <div class="step-box">
+          <div class="step-num">1</div>
+          <div class="step-text">Formatea tu tarjeta MicroSD en <strong>FAT32</strong> (tabla de particiones MBR, no GPT).</div>
+        </div>
+        <div class="step-box">
+          <div class="step-num">2</div>
+          <div class="step-text">Copia los archivos <code>.mjpeg</code> y <code>.pcm</code> directamente en la <strong>raíz</strong> de la microSD (sin carpetas).</div>
+        </div>
+        <div class="step-box">
+          <div class="step-num">3</div>
+          <div class="step-text">Inserta la microSD en tu M5Stack CoreS3 o Waveshare LCD y enciéndelo. ¡La TV empezará a reproducir en bucle!</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>
+        CoreM5S3 TV Web Converter &bull; 
+        Compatible con <a href="https://github.com/Martin78b/corem5s3-tv/tree/feature/dual-display-support" target="_blank" rel="noopener">corem5s3-tv (feature/dual-display-support)</a> &bull;
+        100% procesado en tu navegador (privado y seguro).
+      </p>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
