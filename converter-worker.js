@@ -1,47 +1,54 @@
 /* CoreM5S3 TV Converter - Web Worker */
-/* Handles FFmpeg WASM execution and MJPEG / PCM packaging */
+/* Direct FFmpeg Core integration inside Web Worker (Zero external glue worker, Zero document errors) */
 
-importScripts("lib/ffmpeg/ffmpeg.js");
-importScripts("lib/ffmpeg/util.js");
+importScripts("lib/ffmpeg/ffmpeg-core.js");
 
-const { FFmpeg } = FFmpegWASM;
-const { fetchFile, toBlobURL } = FFmpegUtil;
+let core = null;
 
-let ffmpeg = null;
+async function getCore(onLog) {
+  if (core) return core;
 
-async function initFFmpeg(onLog) {
-  if (ffmpeg) return ffmpeg;
+  onLog("Iniciando motor FFmpeg WebAssembly...");
 
-  ffmpeg = new FFmpeg();
-
-  ffmpeg.on("log", ({ message }) => {
-    onLog(message);
+  core = await createFFmpegCore({
+    locateFile: (path) => {
+      if (path.endsWith(".wasm")) {
+        return "lib/ffmpeg/ffmpeg-core.wasm";
+      }
+      return path;
+    },
+    print: (msg) => {
+      onLog(msg);
+    },
+    printErr: (msg) => {
+      onLog(msg);
+    }
   });
 
-  ffmpeg.on("progress", ({ progress, time }) => {
-    postMessage({
-      type: "ffmpeg_progress",
-      progress: Math.max(0, Math.min(1, progress)),
-      time: time
-    });
+  core.setLogger((log) => {
+    if (log && log.message) {
+      onLog(log.message);
+    }
   });
 
-  try {
-    onLog("Cargando motor local FFmpeg WebAssembly...");
-    await ffmpeg.load({
-      coreURL: await toBlobURL("lib/ffmpeg/ffmpeg-core.js", "text/javascript"),
-      wasmURL: await toBlobURL("lib/ffmpeg/ffmpeg-core.wasm", "application/wasm")
-    });
-    onLog("FFmpeg WASM cargado correctamente.");
-  } catch (err) {
-    onLog(`Error cargando FFmpeg: ${err.message || err}. Reintentando carga directa...`);
-    await ffmpeg.load({
-      coreURL: "lib/ffmpeg/ffmpeg-core.js",
-      wasmURL: "lib/ffmpeg/ffmpeg-core.wasm"
-    });
-  }
+  core.setProgress((prog) => {
+    if (prog && typeof prog.progress === "number") {
+      postMessage({
+        type: "ffmpeg_progress",
+        progress: Math.max(0, Math.min(1, prog.progress)),
+        time: prog.time || 0
+      });
+    }
+  });
 
-  return ffmpeg;
+  onLog("✓ Motor FFmpeg listo.");
+  return core;
+}
+
+// Convert File or Blob to Uint8Array
+async function readBlobAsUint8Array(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 }
 
 // Extract episode info matching convert_episodes.py
@@ -95,7 +102,7 @@ self.onmessage = async (e) => {
   const data = e.data;
   if (data.type === "INIT") {
     try {
-      await initFFmpeg((msg) => {
+      await getCore((msg) => {
         postMessage({ type: "LOG", message: msg });
       });
       postMessage({ type: "INIT_OK" });
@@ -112,7 +119,7 @@ self.onmessage = async (e) => {
     const log = (msg) => postMessage({ type: "LOG", message: msg });
 
     try {
-      await initFFmpeg(log);
+      const ffmpeg = await getCore(log);
 
       const names = generateOutputNames(file.name, index);
       log(`Procesando archivo: ${file.name}`);
@@ -120,15 +127,15 @@ self.onmessage = async (e) => {
       log(`Configuración: ${width}x${height} @ ${fps} FPS, Calidad JPEG: ${quality}, Audio: ${audioRate} Hz mono s16le`);
 
       const inputName = `input_${Date.now()}_${file.name.replace(/[^\w.]/g, "_")}`;
-      await ffmpeg.writeFile(inputName, await fetchFile(file));
+      const fileBytes = await readBlobAsUint8Array(file);
+      ffmpeg.FS.writeFile(inputName, fileBytes);
 
-      // 1. Extraer frames JPEG usando el mismo filtro y escala que convert_episodes.py:
-      // scale=W:H:force_original_aspect_ratio=decrease,pad=W:H:(ow-iw)/2:(oh-ih)/2:black
+      // 1. Extraer frames JPEG usando el mismo filtro y escala que convert_episodes.py
       log("Extrayendo y escalando fotogramas de video...");
       const framePattern = "frame_%06d.jpg";
       const vfScale = `fps=${fps},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
 
-      const videoExit = await ffmpeg.exec([
+      const videoExit = ffmpeg.exec(
         "-y",
         "-i", inputName,
         "-c:v", "mjpeg",
@@ -136,7 +143,7 @@ self.onmessage = async (e) => {
         "-vf", vfScale,
         "-an",
         framePattern
-      ]);
+      );
 
       if (videoExit !== 0) {
         throw new Error("FFmpeg falló al procesar el video. Código: " + videoExit);
@@ -144,9 +151,8 @@ self.onmessage = async (e) => {
 
       // Buscar todos los frames generados
       log("Empaquetando frames en contenedor .mjpeg (CoreM5S3 format)...");
-      const filesInDir = await ffmpeg.listDir(".");
+      const filesInDir = ffmpeg.FS.readdir(".");
       const frameFiles = filesInDir
-        .map(f => f.name)
         .filter(n => /^frame_\d{6}\.jpg$/.test(n))
         .sort();
 
@@ -161,13 +167,12 @@ self.onmessage = async (e) => {
       const frameBuffers = [];
 
       for (let i = 0; i < frameFiles.length; i++) {
-        const frameData = await ffmpeg.readFile(frameFiles[i]);
+        const frameData = ffmpeg.FS.readFile(frameFiles[i]);
         frameBuffers.push(frameData);
-        // 4 bytes size + length + pad if odd
         totalMjpegBytes += 4 + frameData.length + (frameData.length & 1);
 
-        // Limpiar archivo temporal para ahorrar RAM en WASM
-        await ffmpeg.deleteFile(frameFiles[i]);
+        // Limpiar archivo temporal para liberar memoria
+        ffmpeg.FS.unlink(frameFiles[i]);
 
         if ((i + 1) % 100 === 0 || i + 1 === frameFiles.length) {
           postMessage({
@@ -186,7 +191,7 @@ self.onmessage = async (e) => {
       for (let i = 0; i < frameBuffers.length; i++) {
         const jpeg = frameBuffers[i];
         const len = jpeg.length;
-        // struct.pack("<I", frame_size) -> uint32 Little Endian
+        // uint32 Little Endian
         dataView.setUint32(offset, len, true);
         offset += 4;
         mjpegBuffer.set(jpeg, offset);
@@ -200,7 +205,7 @@ self.onmessage = async (e) => {
       // 2. Extraer audio en formato raw PCM: s16le, 1 canal, sample rate
       log("Extrayendo pista de audio a PCM s16le mono...");
       const pcmTempName = "output.pcm";
-      const audioExit = await ffmpeg.exec([
+      const audioExit = ffmpeg.exec(
         "-y",
         "-i", inputName,
         "-vn",
@@ -209,20 +214,20 @@ self.onmessage = async (e) => {
         "-sample_fmt", "s16",
         "-f", "s16le",
         pcmTempName
-      ]);
+      );
 
       let pcmBuffer = null;
       if (audioExit === 0) {
-        pcmBuffer = await ffmpeg.readFile(pcmTempName);
-        await ffmpeg.deleteFile(pcmTempName);
+        pcmBuffer = ffmpeg.FS.readFile(pcmTempName);
+        ffmpeg.FS.unlink(pcmTempName);
         log(`Pista de audio PCM generada (${(pcmBuffer.length / (1024 * 1024)).toFixed(2)} MB)`);
       } else {
-        log("Aviso: No se pudo extraer audio (¿el video carece de pista de sonido?). Se creará PCM de silencio.");
+        log("Aviso: No se detectó audio (¿video mudo?). Se genera buffer vacío.");
         pcmBuffer = new Uint8Array(0);
       }
 
-      // Limpiar archivo original
-      await ffmpeg.deleteFile(inputName);
+      // Limpiar video fuente
+      try { ffmpeg.FS.unlink(inputName); } catch (_) {}
 
       log(`¡Conversión exitosa de ${file.name}!`);
 
