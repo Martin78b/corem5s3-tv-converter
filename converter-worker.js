@@ -1,8 +1,8 @@
 /* CoreM5S3 TV Converter - Web Worker */
 /* Handles FFmpeg WASM execution and MJPEG / PCM packaging */
 
-importScripts("https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js");
-importScripts("https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js");
+importScripts("lib/ffmpeg/ffmpeg.js");
+importScripts("lib/ffmpeg/util.js");
 
 const { FFmpeg } = FFmpegWASM;
 const { fetchFile, toBlobURL } = FFmpegUtil;
@@ -26,22 +26,18 @@ async function initFFmpeg(onLog) {
     });
   });
 
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-  
   try {
-    onLog("Cargando núcleo FFmpeg WebAssembly...");
+    onLog("Cargando motor local FFmpeg WebAssembly...");
     await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm")
+      coreURL: await toBlobURL("lib/ffmpeg/ffmpeg-core.js", "text/javascript"),
+      wasmURL: await toBlobURL("lib/ffmpeg/ffmpeg-core.wasm", "application/wasm")
     });
     onLog("FFmpeg WASM cargado correctamente.");
   } catch (err) {
-    onLog("Error al cargar versión estándar, probando alternativa...");
-    // Fallback single-thread if SharedArrayBuffer not enabled
-    const fallbackURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+    onLog(`Error cargando FFmpeg: ${err.message || err}. Reintentando carga directa...`);
     await ffmpeg.load({
-      coreURL: `${fallbackURL}/ffmpeg-core.js`,
-      wasmURL: `${fallbackURL}/ffmpeg-core.wasm`
+      coreURL: "lib/ffmpeg/ffmpeg-core.js",
+      wasmURL: "lib/ffmpeg/ffmpeg-core.wasm"
     });
   }
 
