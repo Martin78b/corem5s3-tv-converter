@@ -10,13 +10,18 @@ async function getCore(onLog) {
 
   onLog("Iniciando motor FFmpeg WebAssembly...");
 
+  // Resolver la ruta absoluta del .wasm relativa a la ubicación del worker
+  const wasmUrl = new URL("lib/ffmpeg/ffmpeg-core.wasm", self.location.href).href;
+  onLog(`Descargando binario WebAssembly desde: ${wasmUrl}`);
+
+  const resp = await fetch(wasmUrl);
+  if (!resp.ok) {
+    throw new Error(`Fallo al descargar ffmpeg-core.wasm (HTTP ${resp.status}): ${resp.statusText}`);
+  }
+  const wasmBinary = await resp.arrayBuffer();
+
   core = await createFFmpegCore({
-    locateFile: (path) => {
-      if (path.endsWith(".wasm")) {
-        return "lib/ffmpeg/ffmpeg-core.wasm";
-      }
-      return path;
-    },
+    wasmBinary: wasmBinary,
     print: (msg) => {
       onLog(msg);
     },
